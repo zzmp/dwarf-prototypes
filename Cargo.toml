@@ -1,0 +1,10 @@
+[package]
+name = "dwarf-prototypes"
+version = "0.1.0"
+authors = ["Zach Pomerantz <zmp@umich.edu>"]
+
+[dependencies]
+gimli = "0.13.0"
+getopts = "0.2"
+memmap = "0.4.0"
+object = "0.3.0"
