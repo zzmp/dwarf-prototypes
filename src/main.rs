@@ -13,9 +13,9 @@ use std::io;
 use std::fs;
 use std::process;
 
-#[derive(Default)]
 struct Flags {
     print_reserved: bool,
+    print_symbols: bool,
     omit_headers: bool
 }
 
@@ -28,6 +28,7 @@ fn main() {
     let mut opts = getopts::Options::new();
     opts.optflag("C", "print-reserved", "print reserved symbols (_FOO)");
     opts.optflag("o", "omit-headers", "print multiple files' symbols with no separators");
+    opts.optflag("s", "print-symbols", "print symbols before signatures");
 
     let matches = match opts.parse(env::args().skip(1)) {
         Ok(m) => m,
@@ -40,13 +41,11 @@ fn main() {
         print_usage(&opts);
     }
 
-    let mut flags = Flags::default();
-    if matches.opt_present("C") {
-        flags.print_reserved = true;
-    }
-    if matches.opt_present("o") {
-        flags.omit_headers = true;
-    }
+    let flags = Flags{
+        print_symbols: matches.opt_present("s"),
+        print_reserved: matches.opt_present("C"),
+        omit_headers: matches.opt_present("o")
+    };
 
     let mut first_file = true;
     for file_path in &matches.free {
@@ -121,13 +120,17 @@ fn main() {
                 None => ()
             }
 
-            if name == *dwarf_symbol {
-                println!("{}\t{}", name, dwarf_signature);
+            let signature = if name == *dwarf_symbol {
+                dwarf_signature.clone()
             } else {
                 // replace signature name with symbol name
-                let updated_signature = dwarf_signature.clone()
-                    .replace(dwarf_symbol, name.as_str());
-                println!("{}\t{}", name, updated_signature);
+                dwarf_signature.clone().replace(dwarf_symbol, name.as_str())
+            };
+
+            if flags.print_symbols {
+                println!("{}\t{}", name, signature);
+            } else {
+                println!("{}", signature);
             }
         }
     }
