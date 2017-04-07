@@ -3,7 +3,6 @@ extern crate object;
 
 use object::Object;
 use std::option::Option;
-use std::str::FromStr;
 
 pub use self::gimli::LittleEndian as LittleEndian;
 pub use self::gimli::BigEndian as BigEndian;
@@ -63,13 +62,24 @@ fn dump_subprogram<Endian>(unit: &gimli::CompilationUnitHeader<Endian>,
     -> (String, String)
     where Endian: gimli::Endianity
 {
-    let n = get_name(entry, debug_str);
-    if n.is_empty() {
-        panic!("Subprogram name should be non-empty");
-    }
-    let t = get_type(&unit, &abbrevs, debug_str, entry);
-    let mut args = Vec::new();
+    let name = match get_name(entry, debug_str) {
+        Some(name) => name,
+        None => unreachable!()
+    };
+    let typed_name = get_parameter(&unit, &abbrevs, debug_str, entry);
+    let parameters = dump_parameters(unit, abbrevs, debug_str, entry);
+    let signature = format!("{}{}", typed_name, parameters);
+    (name, signature)
+}
 
+fn dump_parameters<Endian>(unit: &gimli::CompilationUnitHeader<Endian>,
+    abbrevs: &gimli::Abbreviations,
+    debug_str: &gimli::DebugStr<Endian>,
+    entry: &gimli::DebuggingInformationEntry<Endian>)
+    -> String
+    where Endian: gimli::Endianity
+{
+    let mut args = Vec::new();
     if entry.has_children() {
         let mut parameters = unit.entries_at_offset(&abbrevs, entry.offset())
             .expect("Should set parameter DIE");
@@ -80,129 +90,139 @@ fn dump_subprogram<Endian>(unit: &gimli::CompilationUnitHeader<Endian>,
                 .expect("Should start parameter DIE")
                 .expect("Should have parameter DIE");
             if parameter.tag() == gimli::DW_TAG_formal_parameter {
-                    let n = get_name(parameter, debug_str);
-                    let t = get_type(&unit, &abbrevs, debug_str, parameter);
-                    args.push((n, t));
+                args.push(get_parameter(&unit, &abbrevs, debug_str, parameter));
             }
         }
 
         while let Some(parameter) = parameters.next_sibling()
             .expect("Should advance parameter DIE") {
             if parameter.tag() == gimli::DW_TAG_formal_parameter {
-                let n = get_name(parameter, debug_str);
-                let t = get_type(&unit, &abbrevs, debug_str, parameter);
-                args.push((n, t));
+                args.push(get_parameter(&unit, &abbrevs, debug_str, parameter));
             }
         }
     }
 
-    (n.clone(), format!("{} {}({})", t, n, args.iter().fold(String::new(), |acc, ref arg| {
-        let (ref n, ref t) = **arg;
-        let spacer = if n.is_empty() {
-            ""
+    let parameters = args.iter().fold(String::new(), |parameters, ref parameter| {
+        if parameters.is_empty() {
+            parameters + parameter.as_str()
         } else {
-            " "
-        };
-        if acc.is_empty() {
-            acc + t + spacer + n
-        } else {
-            acc + ", " + t + spacer + n
+            parameters + ", " + parameter.as_str()
         }
-    })))
+    });
+    format!("({})", parameters)
 }
 
 fn get_name<Endian>(entry: &gimli::DebuggingInformationEntry<Endian>,
-    debug_str: &gimli::DebugStr<Endian>) -> String
+    debug_str: &gimli::DebugStr<Endian>) -> Option<String>
     where Endian: gimli::Endianity
 {
-    let name = match entry.attr(gimli::DW_AT_name).expect("Should parse name") {
+    match entry.attr(gimli::DW_AT_name).expect("Should parse name") {
         Some(name) => {
-            name.string_value(debug_str)
-                .expect("Should have name")
-                .to_str()
-                .expect("Should validate name")
+            let name = name.string_value(debug_str).expect("Should have name")
+                .to_str().expect("Should validate name");
+            let name = String::from(name);
+            Some(name)
         },
-        None => ""
-    };
-    String::from(name)
-}
-
-fn get_type<Endian>(unit: &gimli::CompilationUnitHeader<Endian>,
-    abbrevs: &gimli::Abbreviations,
-    debug_str: &gimli::DebugStr<Endian>,
-    entry: &gimli::DebuggingInformationEntry<Endian>) -> String
-    where Endian: gimli::Endianity
-{
-    match get_type_cursor(unit, abbrevs, debug_str, entry) {
-        Some(cursor) => {
-            let entry = cursor.current().expect("Should get type DIE");
-            get_type_name(unit, abbrevs, debug_str, entry)
-        },
-        None => return String::from("void")
+        None => None
     }
 }
 
-fn get_type_cursor<'a, Endian>(unit: &'a gimli::CompilationUnitHeader<Endian>,
-    abbrevs: &'a gimli::Abbreviations,
-    _: &gimli::DebugStr<Endian>,
-    entry: &gimli::DebuggingInformationEntry<Endian>)
-    -> Option<gimli::EntriesCursor<'a, 'a, 'a, Endian>>
-    where Endian: gimli::Endianity
-{
-    let offset = match entry.attr(gimli::DW_AT_type).expect("Should parse type") {
-        Some(attr) => match attr.value() {
-            gimli::AttributeValue::UnitRef(offset) => offset,
-            _ => panic!("Should have type offset")
-        },
-        None => return None
-    };
-
-    let mut entries = unit.entries_at_offset(abbrevs, offset).expect("Should set type DIE");
-    let _ = entries.next_dfs();
-    Some(entries)
-}
-
-fn get_type_name<Endian>(unit: &gimli::CompilationUnitHeader<Endian>,
+fn get_parameter<Endian>(unit: &gimli::CompilationUnitHeader<Endian>,
     abbrevs: &gimli::Abbreviations,
     debug_str: &gimli::DebugStr<Endian>,
     entry: &gimli::DebuggingInformationEntry<Endian>) -> String
     where Endian: gimli::Endianity
 {
-    // check for DW_AT_name
-    let name = match entry.attr(gimli::DW_AT_name).expect("Should parse type name") {
-        Some(attr) => {
-            let name = attr.string_value(debug_str)
-                .expect("Should have type name")
-                .to_str()
-                .expect("Should validate type name");
-            String::from_str(name).expect("Should convert type name")
-        },
-        None => {
-            let name = match get_type_cursor(unit, abbrevs, debug_str, entry) {
-                Some(cursor) => {
-                    let entry = cursor.current().expect("Should get type DIE");
-                    get_type_name(unit, abbrevs, debug_str, entry)
-                },
-                None => String::from("void")
-            };
-            name + get_qualifier(entry)
-        }
+    let name = get_name(entry, debug_str);
+
+    let mut offset = get_type_offset(entry);
+    let mut subroutine_offset = None;
+    let mut type_name = match offset {
+        Some(_) => None,
+        None => Some(String::from("void"))
     };
 
-    name
+    let mut specs = Vec::new();
+
+    // find all specifiers on the way to the name
+    while type_name == None {
+        let mut cursor = unit.entries_at_offset(abbrevs, offset.unwrap())
+            .expect("Should set type DIE");
+        let _ = cursor.next_dfs();
+        let entry = cursor.current().expect("Should have type DIE");
+        type_name = get_name(entry, debug_str);
+        if type_name == None {
+            let specifier = get_type_specifier(entry);
+            // subroutines need special treatment
+            if specifier == Qualifier::Subroutine {
+                specs.pop(); // all subroutines are pointers
+                subroutine_offset = offset;
+            }
+            specs.push(specifier);
+            offset = get_type_offset(entry);
+            if offset == None {
+                type_name = Some(String::from("void"));
+            }
+        };
+    }
+
+    // build the decl-specifier-seq
+    let parameter = specs.iter().fold(type_name.unwrap(), |seq, spec| {
+        match *spec {
+            Qualifier::Specifier(spec) => seq + spec,
+            Qualifier::Attr(attr) => seq + " " + attr,
+            Qualifier::Subroutine => seq
+        }
+    });
+
+    // subroutines have unique syntax
+    if specs.first() == Some(&Qualifier::Subroutine) {
+        let mut cursor = unit.entries_at_offset(abbrevs, subroutine_offset.unwrap())
+            .expect("Should set type DIE");
+        let _ = cursor.next_dfs();
+        let entry = cursor.current().expect("Should have type DIE");
+        let subparameters = dump_parameters(unit, abbrevs, debug_str, entry);
+        let name = name.unwrap_or(String::from(""));
+        format!("{} (*{}){}", parameter, name.as_str(), subparameters)
+    } else {
+        match name {
+            Some(name) => format!("{} {}", parameter, name),
+            None => parameter
+        }
+    }
 }
 
-fn get_qualifier<Endian>(entry: &gimli::DebuggingInformationEntry<Endian>) -> &'static str
+fn get_type_offset<Endian>(entry: &gimli::DebuggingInformationEntry<Endian>)
+    -> Option<gimli::UnitOffset>
+    where Endian: gimli::Endianity
+{
+    match entry.attr(gimli::DW_AT_type).expect("Should parse type") {
+        Some(attr) => match attr.value() {
+            gimli::AttributeValue::UnitRef(offset) => Some(offset),
+            _ => unreachable!()
+        },
+        None => None
+    }
+}
+
+#[derive(Debug)]
+#[derive(PartialEq)]
+enum Qualifier {
+    Specifier(&'static str),
+    Attr(&'static str),
+    Subroutine
+}
+
+fn get_type_specifier<Endian>(entry: &gimli::DebuggingInformationEntry<Endian>) -> Qualifier
     where Endian: gimli::Endianity
 {
     match entry.tag() {
-        gimli::DW_TAG_pointer_type => "*",
-        gimli::DW_TAG_reference_type => "&",
-        gimli::DW_TAG_const_type => " const",
-        gimli::DW_TAG_restrict_type => " restrict",
-        gimli::DW_TAG_volatile_type => " volatile",
-        // subroutines are not parsed
-        gimli::DW_TAG_subroutine_type => " SUBROUTINE ",
+        gimli::DW_TAG_pointer_type => Qualifier::Specifier("*"),
+        gimli::DW_TAG_reference_type => Qualifier::Specifier("&"),
+        gimli::DW_TAG_subroutine_type => Qualifier::Subroutine,
+        gimli::DW_TAG_const_type => Qualifier::Attr("const"),
+        gimli::DW_TAG_volatile_type => Qualifier::Attr("volatile"),
+        gimli::DW_TAG_restrict_type => Qualifier::Attr("restrict"),
         unknown_tag => panic!("Unknown tag: {}", unknown_tag)
     }
 }
