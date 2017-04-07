@@ -31,10 +31,15 @@ fn main() {
         print_usage(&opts);
     }
 
+    let mut first_file = true;
     for file_path in &matches.free {
         if matches.free.len() != 1 {
-            println!("{}", file_path);
-            println!("");
+            if first_file {
+                first_file = false;
+            } else {
+                println!("");
+            }
+            println!("{}:", file_path);
         }
 
         let file = fs::File::open(&file_path)
@@ -80,7 +85,7 @@ fn main() {
             }
         }
 
-        for (symbol, &&(dwarf_symbol, signature)) in symbols.iter() {
+        for (symbol, &&(dwarf_symbol, dwarf_signature)) in symbols.iter() {
             // skip implementer-specific functions
             if symbol.starts_with("_") {
                 continue;
@@ -94,13 +99,17 @@ fn main() {
             }
 
             if name == *dwarf_symbol {
-                println!("{}: {}", name, signature);
+                print_signature(name.as_str(), dwarf_signature);
             } else {
                 // replace signature name with symbol name
-                let updated_signature = signature.clone()
+                let updated_signature = dwarf_signature.clone()
                     .replace(dwarf_symbol, name.as_str());
-                println!("{}: {}", name, updated_signature);
+                print_signature(name.as_str(), updated_signature.as_str());
             }
         }
     }
+}
+
+fn print_signature(symbol: &str, signature: &str) {
+    println!("{}\t{}", symbol, signature);
 }
