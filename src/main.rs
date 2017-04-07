@@ -13,13 +13,22 @@ use std::io;
 use std::fs;
 use std::process;
 
+#[derive(Default)]
+struct Flags {
+    print_reserved: bool,
+    omit_headers: bool
+}
+
 fn print_usage(opts: &getopts::Options) -> ! { let brief = format!("Usage: {} <options> <file>...", env::args().next().unwrap());
     write!(&mut io::stderr(), "{}", opts.usage(&brief)).ok();
     process::exit(1);
 }
 
 fn main() {
-    let opts = getopts::Options::new();
+    let mut opts = getopts::Options::new();
+    opts.optflag("C", "print-reserved", "print reserved symbols (_FOO)");
+    opts.optflag("o", "omit-headers", "print multiple files' symbols with no separators");
+
     let matches = match opts.parse(env::args().skip(1)) {
         Ok(m) => m,
         Err(e) => {
@@ -31,15 +40,27 @@ fn main() {
         print_usage(&opts);
     }
 
+    let mut flags = Flags::default();
+    if matches.opt_present("C") {
+        flags.print_reserved = true;
+    }
+    if matches.opt_present("o") {
+        flags.omit_headers = true;
+    }
+
     let mut first_file = true;
     for file_path in &matches.free {
         if matches.free.len() != 1 {
+            if !flags.omit_headers {
+                if !first_file {
+                    println!("");
+                }
+                println!("{}:", file_path);
+            }
+
             if first_file {
                 first_file = false;
-            } else {
-                println!("");
             }
-            println!("{}:", file_path);
         }
 
         let file = fs::File::open(&file_path)
@@ -88,7 +109,9 @@ fn main() {
         for (symbol, &&(dwarf_symbol, dwarf_signature)) in symbols.iter() {
             // skip implementer-specific functions
             if symbol.starts_with("_") {
-                continue;
+                if !flags.print_reserved {
+                    continue;
+                }
             }
 
             // strip versioning from symbol
@@ -99,17 +122,13 @@ fn main() {
             }
 
             if name == *dwarf_symbol {
-                print_signature(name.as_str(), dwarf_signature);
+                println!("{}\t{}", name, dwarf_signature);
             } else {
                 // replace signature name with symbol name
                 let updated_signature = dwarf_signature.clone()
                     .replace(dwarf_symbol, name.as_str());
-                print_signature(name.as_str(), updated_signature.as_str());
+                println!("{}\t{}", name, updated_signature);
             }
         }
     }
-}
-
-fn print_signature(symbol: &str, signature: &str) {
-    println!("{}\t{}", symbol, signature);
 }
